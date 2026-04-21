@@ -8,26 +8,67 @@ import pyautogui
 
 import boardManager
 
-MONITOR = {"top": 0, "left": -1920, "width": 1920, "height": 1080}
-BOARD_COORDINATES = {"Top": 167, "Left": 195, "Bottom": 809, "Right": 1421}
+MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
+BOARD_COORDINATES = {"Top": 176, "Left": 196, "Bottom": 845, "Right": 1411}
 EXTRACTION_FOLDER = "extraction"
 
 os.makedirs(EXTRACTION_FOLDER, exist_ok=True)
-
 
 def isolate_board(frame):
     return frame[
         BOARD_COORDINATES["Top"]:BOARD_COORDINATES["Bottom"], BOARD_COORDINATES["Left"]:BOARD_COORDINATES["Right"]]
 
+# ==========================================
+# --- NOUVELLE FONCTION DE DÉCOUPAGE ---
+# ==========================================
+def split_into_digits(binarized_img):
+    """
+    Isole chaque chiffre en détectant ses contours. 
+    Parfait pour les chiffres très collés qui ne partagent pas de pixels.
+    """
+    # 1. Trouver les contours extérieurs (les formes blanches)
+    contours, _ = cv2.findContours(binarized_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    bounding_boxes = []
+    
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        # Filtre anti-bruit : on ignore les parasites de moins de 5 pixels de surface
+        if w * h >= 5: 
+            bounding_boxes.append((x, y, w, h, c))
+            
+    # 2. Trier les formes de gauche à droite (selon leur position X)
+    bounding_boxes.sort(key=lambda b: b[0])
+    
+    digits = []
+    
+    for x, y, w, h, c in bounding_boxes:
+        # 3. Créer un masque noir de la taille de l'image
+        mask = np.zeros_like(binarized_img)
+        
+        # Dessiner SEULEMENT ce chiffre (forme pleine) en blanc sur le masque
+        cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
+        
+        # 4. Appliquer le masque : on efface tout ce qui n'appartient pas à ce chiffre
+        # (Très utile si les boîtes des chiffres se chevauchent !)
+        isolated_digit = cv2.bitwise_and(binarized_img, mask)
+        
+        # 5. Découper la largeur du chiffre, mais garder toute la hauteur 
+        # (pour que le réseau de neurones / template matching ait une hauteur constante)
+        digit_crop = isolated_digit[:, x:x+w]
+        
+        digits.append(digit_crop)
+        
+    return digits
+
 
 def main():
-    # Instead of hashes, we store the actual NumPy arrays of the images we've saved
     saved_images = []
+    MAX_PIXEL_DIFFERENCE = 3
 
-    # Tolerated difference (in pixels).
-    # If less than 15 pixels are different, we consider it a duplicate.
-    # You can tweak this number! Higher = less images saved. Lower = more images saved.
-    MAX_PIXEL_DIFFERENCE = 15
+    for filename in os.listdir(EXTRACTION_FOLDER):
+        img = cv2.imread(os.path.join(EXTRACTION_FOLDER, filename), cv2.IMREAD_UNCHANGED)
+        saved_images.append(img)
 
     print(f"[*] Extractor running. Images will be saved to '{EXTRACTION_FOLDER}/'.")
     print(f"[*] Tolerance set to {MAX_PIXEL_DIFFERENCE} pixels. Press 'q' to stop.")
@@ -35,7 +76,6 @@ def main():
     with mss.mss() as sct:
         while True:
             time.sleep(0.5)
-
 
             screenshot = sct.grab(MONITOR)
             frame = np.array(screenshot)
@@ -46,13 +86,11 @@ def main():
 
             couleur_pixel = boardManager.get_drop_color()
 
-            # Remplacez B, G, R par la couleur exacte de ce pixel (Rappel : OpenCV utilise le format BGR, pas RGB !)
-            couleur_attendue_bgr = (255, 177, 109)  # Exemple arbitraire
+            couleur_attendue_bgr = (255, 171, 98)
 
             if couleur_pixel != couleur_attendue_bgr:
-                # Si la couleur ne correspond pas, on n'est pas sur le tableau !
                 print("En attente du tableau...")
-                time.sleep(1)  # On attend un peu plus longtemps pour économiser le CPU
+                time.sleep(1)
                 continue
 
             board_image = isolate_board(frame)
@@ -70,62 +108,54 @@ def main():
             for cell in cells:
                 x, y, w, h = cell['x'], cell['y'], cell['w'], cell['h']
 
-                roi_x = x + 42
-                roi_y = y + 40
-                roi_w = 9
+                roi_x = x + 39
+                roi_y = y + 41
+                roi_w = 12
                 roi_h = 11
 
                 number_crop = board_image[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
 
                 gray_crop = cv2.cvtColor(number_crop, cv2.COLOR_BGR2GRAY)
-                _, binarized_crop = cv2.threshold(gray_crop, 200, 255, cv2.THRESH_BINARY)
+                _, binarized_crop = cv2.threshold(gray_crop, 210, 255, cv2.THRESH_BINARY)
 
-                # ==========================================
-                # --- NEW: THE SANITY CHECK (GATEKEEPER) ---
-                # ==========================================
+                # --- 1. SÉPARER LES CHIFFRES ICI ---
+                individual_digits = split_into_digits(binarized_crop)
 
-                # 1. Check pixel density
-                white_pixels = cv2.countNonZero(binarized_crop)
-                total_pixels = roi_w * roi_h  # 24 * 11 = 264 pixels
+                # --- 2. TRAITER CHAQUE CHIFFRE SÉPARÉMENT ---
+                for digit_img in individual_digits:
+                    
+                    white_pixels = cv2.countNonZero(digit_img)
 
-                # If less than 10 pixels are white, it's mostly empty shadow.
-                # If more than 120 pixels are white, it's covered by a bright hover effect.
-                # (You may need to tweak 10 and 120 slightly based on your game's font thickness)
-                if white_pixels < 10 or white_pixels > 50:
-                    continue  # Reject immediately! It's garbage.
+                    # J'ai ajusté la limite basse à 5 au lieu de 10 car 
+                    # certains chiffres fins (comme le 1) auront très peu de pixels.
+                    if white_pixels < 5 or white_pixels > 50:
+                        continue  # Rejeté, c'est du bruit
 
-                # 2. Check structure height
-                # Find the bounding box of whatever white pixels are in the image
-                #contours_crop, _ = cv2.findContours(binarized_crop, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                #if not contours_crop:
-                #    continue
+                    is_duplicate = False
 
-                # ==========================================
-                # --- OLD: FUZZY MATCHING (FOR DUPLICATES) ---
-                # ==========================================
-                is_duplicate = False
+                    for saved_img in saved_images:
+                        # TRÈS IMPORTANT : On ne peut comparer que des images de la même taille !
+                        # Comme on a découpé, un "1" n'aura pas la même largeur qu'un "8".
+                        if saved_img.shape == digit_img.shape:
+                            diff = cv2.absdiff(digit_img, saved_img)
+                            different_pixels = np.count_nonzero(diff)
 
-                for saved_img in saved_images:
-                    diff = cv2.absdiff(binarized_crop, saved_img)
-                    different_pixels = np.count_nonzero(diff)
+                            if different_pixels <= MAX_PIXEL_DIFFERENCE:
+                                is_duplicate = True
+                                break
 
-                    if different_pixels <= 3:  # Your tolerance
-                        is_duplicate = True
-                        break
-
-                if not is_duplicate:
-                    filename = f"img_{int(time.time() * 1000)}.png"
-                    filepath = os.path.join(EXTRACTION_FOLDER, filename)
-                    cv2.imwrite(filepath, binarized_crop)
-                    saved_images.append(binarized_crop)
-                    print(f"Saved new unique digit: {filename} (White pixels: {white_pixels})")
+                    if not is_duplicate:
+                        filename = f"img_{int(time.time() * 1000)}.png"
+                        filepath = os.path.join(EXTRACTION_FOLDER, filename)
+                        cv2.imwrite(filepath, digit_img)
+                        saved_images.append(digit_img)
+                        print(f"Saved new unique digit: {filename} (Shape: {digit_img.shape}, White px: {white_pixels})")
 
             cv2.imshow("Extractor Active", cv2.resize(board_image, (400, 300)))
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
     cv2.destroyAllWindows()
-
 
 if __name__ == "__main__":
     main()
