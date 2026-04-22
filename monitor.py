@@ -1,144 +1,26 @@
-import os
-import time
-
 import torch
 import torch.nn as nn
 
-import cv2
-import numpy as np
-import mss
-
 import boardManager
-from boardManager import get_drop_color
+from boardHelper import read_number_with_pytorch, ChiffreCNN, cnn_model
 
-# ==========================================
-# --- 1. ARCHITECTURE DU MODÈLE PYTORCH ---
-# ==========================================
-class ChiffreCNN(nn.Module):
-    def __init__(self):
-        super(ChiffreCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, 3, padding=1)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(128, 64)
-        self.relu3 = nn.ReLU()
-        self.dropout = nn.Dropout(0.3) # Peut rester ici, désactivé par .eval()
-        self.fc2 = nn.Linear(64, 10)
+from boardManager import *
 
-    def forward(self, x):
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
-        x = self.flatten(x)
-        x = self.relu3(self.fc1(x))
-        x = self.fc2(x) # Dropout ignoré pendant l'inférence
-        return x
+endgame = True
 
-# Initialisation (On utilise le CPU car pour des images 11x9, c'est instantané)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-cnn_model = ChiffreCNN().to(device)
-cnn_model.load_state_dict(torch.load("modele_chiffres.pth", map_location=device, weights_only=True))
-cnn_model.eval() # TRÈS IMPORTANT : Désactive le Dropout pour l'inférence
-
-# ==========================================
-# --- 2. CONSTANTES ET VARIABLES ---
-# ==========================================
 MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
-BOARD_COORDINATES = {"Top": 176, "Left": 196, "Bottom": 845, "Right": 1411}
 
 restart_red = (255, 67, 1)
 next_green = (0, 197, 41)
+
 drop_color = (255, 171, 98)
-gift_green = (255, 235, 102)
-gift_red = (244, 127, 135)
-cant_buy_color = (166, 89, 40)
+no_gift_green = (204, 190, 103)
+air = (3, 255, 234)
+no_gift_red = (196, 118, 122)
+cant_buy_color = (166, 90, 40)
+
 unlocked_color = (0, 239, 28)
 
-# ==========================================
-# --- 3. FONCTIONS DE TRAITEMENT D'IMAGE ---
-# ==========================================
-def isolate_board(frame):
-    return frame[
-        BOARD_COORDINATES["Top"]:BOARD_COORDINATES["Bottom"], BOARD_COORDINATES["Left"]:BOARD_COORDINATES["Right"]]
-
-def split_into_digits(binarized_img):
-    contours, _ = cv2.findContours(binarized_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bounding_boxes = []
-    
-    for c in contours:
-        x, y, w, h = cv2.boundingRect(c)
-        if w * h >= 5: 
-            bounding_boxes.append((x, y, w, h, c))
-            
-    bounding_boxes.sort(key=lambda b: b[0])
-    digits = []
-    
-    for x, y, w, h, c in bounding_boxes:
-        mask = np.zeros_like(binarized_img)
-        cv2.drawContours(mask, [c], -1, 255, thickness=cv2.FILLED)
-        isolated_digit = cv2.bitwise_and(binarized_img, mask)
-        digit_crop = isolated_digit[:, x:x+w]
-        digits.append(digit_crop)
-        
-    return digits
-
-def pad_to_target_size(img, target_h=11, target_w=9):
-    h, w = img.shape[:2]
-    if h > target_h or w > target_w:
-        img = cv2.resize(img, (min(w, target_w), min(h, target_h)), interpolation=cv2.INTER_AREA)
-        h, w = img.shape[:2]
-
-    top = (target_h - h) // 2
-    bottom = target_h - h - top
-    left = (target_w - w) // 2
-    right = target_w - w - left
-
-    padded_img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
-    return padded_img
-
-# ==========================================
-# --- 4. LECTURE PAR RÉSEAU DE NEURONES ---
-# ==========================================
-def read_number_with_pytorch(roi_image, model):
-    gray_crop = cv2.cvtColor(roi_image, cv2.COLOR_BGR2GRAY)
-    _, binarized_crop = cv2.threshold(gray_crop, 210, 255, cv2.THRESH_BINARY)
-
-    # 1. Découpage en chiffres séparés
-    digits = split_into_digits(binarized_crop)
-    
-    if not digits:
-        return 0
-
-    final_number_str = ""
-
-    # 2. Inférence pour chaque chiffre
-    for digit_img in digits:
-        if cv2.countNonZero(digit_img) < 5:
-            continue
-
-        # Formatage 11x9
-        padded_digit = pad_to_target_size(digit_img, 11, 9)
-
-        # PyTorch attend des valeurs de 0 à 1 en Float32
-        img_array = padded_digit.astype(np.float32) / 255.0
-        
-        # Ajout des dimensions [Batch, Canal, H, W] -> [1, 1, 11, 9]
-        tensor_img = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            outputs = model(tensor_img)
-        
-        _, predicted = torch.max(outputs.data, 1)
-        final_number_str += str(predicted.item())
-
-    return int(final_number_str) if final_number_str else 0
-
-# ==========================================
-# --- 5. LOGIQUE DU JEU ---
-# ==========================================
 def get_grid_matrix(board_image, model):
     gray = cv2.cvtColor(board_image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY_INV)
@@ -181,8 +63,7 @@ def get_grid_matrix(board_image, model):
             roi_h = 11
 
             number_crop = board_image[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
-            
-            # APPEL DU RÉSEAU DE NEURONES ICI
+
             text = read_number_with_pytorch(number_crop, model)
             
             center_local_x = x + int(w / 2)
@@ -209,10 +90,53 @@ def get_grid_matrix(board_image, model):
             text_y = y + int(h / 2) + 10
             cv2.putText(board_image, numero_trouve, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    board_image = cv2.resize(board_image, (400, 300))
-    cv2.imshow("Debug PyTorch", board_image)
+    board_image = cv2.resize(board_image, (int(0.5 * board_image.shape[1]), int(0.5 * board_image.shape[0])))
+    cv2.imshow("Debug PyTorch", board_image[0:board_image.shape[0], int(board_image.shape[1] * 0.25):int(board_image.shape[1] * 0.75)])
 
     return matrix
+
+
+def optimize_tools(matrix):
+    # Sécurité : on s'assure que la matrice n'est pas vide
+    if not matrix:
+        return
+
+    # La rangée du bas est la dernière ligne de la matrice (-1)
+    rangee_du_bas = matrix[-1]
+
+    # On s'assure qu'il y a bien au moins 4 cases dans cette rangée
+    if len(rangee_du_bas) < 4:
+        return
+
+    # Nos 4 "places de parking" VIP en bas à gauche
+    cases_vip = [
+        rangee_du_bas[0],
+        rangee_du_bas[1],
+        rangee_du_bas[2],
+        rangee_du_bas[3]
+    ]
+
+    # Récupérer tous les outils valides
+    all_tools = []
+    for row in matrix:
+        for cell in row:
+            if cell["niveau"] > 0:
+                all_tools.append(cell)
+
+    # Trier du plus fort au plus faible
+    top_tools = sorted(all_tools, key=lambda t: t['niveau'], reverse=True)
+
+    # On gare nos 4 meilleurs outils (ou moins si on en a moins de 4 sur le plateau)
+    for i in range(min(4, len(top_tools))):
+        outil = top_tools[i]
+        case_cible = cases_vip[i]
+
+        # Si l'outil n'est pas DÉJÀ à sa place exacte, on le bouge
+        if outil["x"] != case_cible["x"] or outil["y"] != case_cible["y"]:
+            pos_actuelle = (outil["x"], outil["y"])
+            pos_cible = (case_cible["x"], case_cible["y"])
+
+            boardManager.move_tool(pos_actuelle, pos_cible)
 
 def trouver_pelles_a_fusionner(matrix):
     pelles_par_niveau = {}
@@ -231,10 +155,16 @@ def trouver_pelles_a_fusionner(matrix):
     return pelles_en_double
 
 def main():
-    on_board = False
+    debug_cells = False
+    iteration = 0
 
     with mss.mss() as sct:
         while True:
+            on_board = False
+
+            if boardManager.get_unlocked_color() == unlocked_color:
+                boardManager.click_unlocked_button()
+
             # 1. Capture d'écran (Très rapide)
             if get_drop_color() == drop_color:
                 on_board = True
@@ -244,21 +174,31 @@ def main():
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             detected_board = isolate_board(frame)
 
+            if debug_cells:
+                time.sleep(0.1)
+
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+                continue
+
             if on_board:
+                if iteration == 5:
+                    iteration = 0
+                    boardManager.buy_in_shop_sequence()
+
                 action_done = False # Traceur pour court-circuiter les étapes
 
                 # --- ÉTAPE 1 : CADEAUX (Priorité absolue, coût CPU proche de 0) ---
-                if boardManager.get_red_gift_color() == gift_red:
+                if boardManager.get_red_gift_color() != no_gift_red and boardManager.get_red_gift_color() != air:
                     boardManager.get_red_gift()
-                    boardManager.go_outside_board()
                     action_done = True
-                elif boardManager.get_green_gift_color() == gift_green:
+                elif boardManager.get_green_gift_color() != no_gift_green and boardManager.get_green_gift_color() != air and True == False:
                     boardManager.get_green_gift()
-                    boardManager.go_outside_board()
                     action_done = True
 
                 # --- ÉTAPE 2 : ACHATS SPAM (Si pas de cadeaux) ---
-                if not action_done:
+                if not action_done and True == False:
                     bought_something = False
                     # On achète en boucle tant que le bouton est allumé
                     while boardManager.get_buy_color() != cant_buy_color:
@@ -271,7 +211,6 @@ def main():
 
                 # --- ÉTAPE 3 : LECTURE IA ET FUSIONS (Uniquement si le plateau est "calme") ---
                 if not action_done:
-                    # On appelle le CNN uniquement si on n'a rien cliqué d'autre
                     grid_matrix = get_grid_matrix(detected_board, cnn_model)
                     fusions_possibles = trouver_pelles_a_fusionner(grid_matrix)
 
@@ -286,24 +225,61 @@ def main():
                                 pelle_2 = (pelles[i+1]["x"], pelles[i+1]["y"])
                                 boardManager.move_tool(pelle_1, pelle_2)
 
-                                # Check sécurité anti-popup
-                                if boardManager.get_unlocked_color() == unlocked_color:
-                                    boardManager.click_unlocked_button()
-
                 # --- ÉTAPE 4 : DROP (Dernier recours pour générer du contenu) ---
                 if not action_done:
+                    grid_matrix = get_grid_matrix(detected_board, cnn_model)
+
+                    # if endgame:
+                    #     LEVEL_THRESHOLD = 10
+                    #     DISCARD_COORDS = (738, 273)
+                    #
+                    #     highest_level = max((cell["niveau"] for row in grid_matrix for cell in row), default=0)
+                    #
+                    #     # 1. Vérifie la valeur max détectée
+                    #     print(f"DEBUG: Niveau maximum détecté = {highest_level}")
+                    #
+                    #     for row in grid_matrix:
+                    #         for cell in row:
+                    #             niveau = cell["niveau"]
+                    #
+                    #             if 0 < niveau < (highest_level - LEVEL_THRESHOLD):
+                    #                 # 2. Vérifie quels objets il cible avant le clic
+                    #                 print(f"DEBUG: Suppression objet niveau {niveau} en X:{cell['x']} Y:{cell['y']}")
+                    #
+                    #                 boardManager.move_tool((cell["x"], cell["y"]), DISCARD_COORDS)
+                    #
+                    #                 # 3. Ajoute une petite pause pour laisser le jeu respirer
+                    #                 time.sleep(0.3)
+
+                    optimize_tools(grid_matrix)
                     on_board = False
+                    iteration += 1
                     boardManager.drop()
             else:
                 # --- ÉTAPE 5 : NAVIGATION DE FIN DE NIVEAU ---
                 current_color = boardManager.get_next_button_color()
                 if current_color == restart_red:
                     boardManager.click_next_button()
-                    on_board = True
+                    boardManager.go_outside_board()
+                    while not on_board:
+                        time.sleep(0.1)
+                        pyautogui.click()
+                        if get_drop_color() == drop_color:
+                            on_board = True
                 elif current_color == next_green:
                     boardManager.click_next_button()
                     boardManager.drop()
-                    on_board = True
+                    boardManager.go_outside_board()
+                    while not on_board:
+                        time.sleep(0.1)
+                        pyautogui.click()
+                        if get_drop_color() == drop_color:
+                            on_board = True
+                else:
+                    time.sleep(0.1)
+                    drop()
+                    if get_drop_color() == drop_color:
+                        on_board = True
 
             # OpenCV interface
             if cv2.waitKey(1) & 0xFF == ord('q'):
