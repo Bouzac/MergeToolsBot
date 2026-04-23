@@ -2,24 +2,21 @@ import torch
 import torch.nn as nn
 
 import boardManager
-from boardHelper import read_number_with_pytorch, ChiffreCNN, cnn_model
+from boardHelper import read_number_with_pytorch, ChiffreCNN, cnn_model, MONITOR, BOARD_COORDINATES, isolate_board
 
 from boardManager import *
 
-endgame = True
+restart_red = (255, 94, 48)
+next_green = (0, 234, 67)
 
-MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
+drop_color = (255, 170, 97)
+no_gift_green = (105, 178, 120)
+no_gift_red = (193, 190, 191)
+cant_buy_color = (159, 144, 65)
 
-restart_red = (255, 67, 1)
-next_green = (0, 197, 41)
-
-drop_color = (255, 171, 98)
-no_gift_green = (204, 190, 103)
 air = (3, 255, 234)
-no_gift_red = (196, 118, 122)
-cant_buy_color = (166, 90, 40)
 
-unlocked_color = (0, 239, 28)
+unlocked_color = (79, 255, 98)
 
 def get_grid_matrix(board_image, model):
     gray = cv2.cvtColor(board_image, cv2.COLOR_BGR2GRAY)
@@ -55,11 +52,11 @@ def get_grid_matrix(board_image, model):
 
         for cell in row:
             x, y, w, h = cell['x'], cell['y'], cell['w'], cell['h']
-            
+
             # --- OFFSETS DE LA CASE ---
-            roi_x = x + 32
-            roi_y = y + 40
-            roi_w = 21
+            roi_x = x + 40
+            roi_y = y + 48
+            roi_w = 24
             roi_h = 11
 
             number_crop = board_image[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
@@ -80,7 +77,6 @@ def get_grid_matrix(board_image, model):
 
         matrix.append(matrix_row)
 
-    # Debug visuel
     for i, row in enumerate(rows):
         for j, cell in enumerate(row):
             x, y, w, h = cell['x'], cell['y'], cell['w'], cell['h']
@@ -91,7 +87,7 @@ def get_grid_matrix(board_image, model):
             cv2.putText(board_image, numero_trouve, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     board_image = cv2.resize(board_image, (int(0.5 * board_image.shape[1]), int(0.5 * board_image.shape[0])))
-    cv2.imshow("Debug PyTorch", board_image[0:board_image.shape[0], int(board_image.shape[1] * 0.25):int(board_image.shape[1] * 0.75)])
+    cv2.imshow("Debug PyTorch", board_image)
 
     return matrix
 
@@ -143,7 +139,7 @@ def trouver_pelles_a_fusionner(matrix):
     for row in matrix:
         for cell in row:
             niveau = cell["niveau"]
-            if niveau > 0:
+            if 0 < niveau < 65:
                 if niveau not in pelles_par_niveau:
                     pelles_par_niveau[niveau] = []
                 pelles_par_niveau[niveau].append(cell)
@@ -171,16 +167,20 @@ def main():
 
             screenshot = sct.grab(MONITOR)
             frame = np.array(screenshot)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            detected_board = isolate_board(frame)
+            detected_board = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
             if debug_cells:
                 time.sleep(0.1)
+
+                get_grid_matrix(detected_board, cnn_model)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
                 continue
+
+            if debug_cells:
+                return
 
             if on_board:
                 if iteration == 5:
@@ -193,12 +193,12 @@ def main():
                 if boardManager.get_red_gift_color() != no_gift_red and boardManager.get_red_gift_color() != air:
                     boardManager.get_red_gift()
                     action_done = True
-                elif boardManager.get_green_gift_color() != no_gift_green and boardManager.get_green_gift_color() != air and True == False:
+                elif boardManager.get_green_gift_color() != no_gift_green and boardManager.get_green_gift_color() != air:
                     boardManager.get_green_gift()
                     action_done = True
 
                 # --- ÉTAPE 2 : ACHATS SPAM (Si pas de cadeaux) ---
-                if not action_done and True == False:
+                if not action_done:
                     bought_something = False
                     # On achète en boucle tant que le bouton est allumé
                     while boardManager.get_buy_color() != cant_buy_color:

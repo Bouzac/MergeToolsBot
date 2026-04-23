@@ -8,12 +8,10 @@ import pyautogui
 
 import boardManager
 
-from boardHelper import split_into_digits
+from boardHelper import split_into_digits, BOARD_COORDINATES, MONITOR
 
-MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
-BOARD_COORDINATES = {"Top": 176, "Left": 196, "Bottom": 845, "Right": 1411}
-EXTRACTION_FOLDER = r"D:\code project\MergeToolsBot\extraction"
-DATASET_FOLDER = r"D:\code project\MergeToolsBot\dataset"
+EXTRACTION_FOLDER = r"..\extraction"
+DATASET_FOLDER = r"..\dataset"
 
 os.makedirs(EXTRACTION_FOLDER, exist_ok=True)
 
@@ -24,7 +22,7 @@ def isolate_board(frame):
 
 def main():
     saved_images = []
-    MAX_PIXEL_DIFFERENCE = 2
+    MAX_PIXEL_DIFFERENCE = 5
 
     for filename in os.listdir(EXTRACTION_FOLDER):
         img = cv2.imread(os.path.join(EXTRACTION_FOLDER, filename), cv2.IMREAD_UNCHANGED)
@@ -51,14 +49,14 @@ def main():
 
             couleur_pixel = boardManager.get_drop_color()
 
-            couleur_attendue_bgr = (255, 171, 98)
+            couleur_attendue_bgr = (255, 170, 97)
 
             if couleur_pixel != couleur_attendue_bgr:
                 print("En attente du tableau...")
                 time.sleep(1)
                 continue
 
-            board_image = isolate_board(frame)
+            board_image = frame
 
             gray = cv2.cvtColor(board_image, cv2.COLOR_BGR2GRAY)
             _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY_INV)
@@ -73,9 +71,9 @@ def main():
             for cell in cells:
                 x, y, w, h = cell['x'], cell['y'], cell['w'], cell['h']
 
-                roi_x = x + 39
-                roi_y = y + 41
-                roi_w = 12
+                roi_x = x + 40
+                roi_y = y + 48
+                roi_w = 24
                 roi_h = 11
 
                 number_crop = board_image[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]

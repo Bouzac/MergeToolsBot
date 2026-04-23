@@ -3,7 +3,7 @@ import numpy as np
 import mss
 import time
 
-MONITOR = {"top": 0, "left": 0, "width": 1920, "height": 1080}
+from boardHelper import MONITOR
 
 # Point de départ par défaut (l'ancre / le coin de ta case)
 anchor_x, anchor_y = 960, 540 

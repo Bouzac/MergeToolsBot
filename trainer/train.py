@@ -9,12 +9,10 @@ import os
 DATASET_DIR = "../dataset"
 IMG_HEIGHT = 11  # Fixé par ton annotation
 IMG_WIDTH = 9    # Fixé par ton annotation
-BATCH_SIZE = 16  # Réduit un peu pour la stabilité sur petit dataset
-EPOCHS = 250     # 100 suffisent généralement pour des chiffres si simples
+BATCH_SIZE = 32  # Réduit un peu pour la stabilité sur petit dataset
+EPOCHS = 300     # 100 suffisent généralement pour des chiffres si simples
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-print(f"training on {device}")
 
 class ChiffreCNN(nn.Module):
     def __init__(self):
@@ -22,13 +20,10 @@ class ChiffreCNN(nn.Module):
         self.conv1 = nn.Conv2d(1, 16, 3, padding=1)
         self.relu1 = nn.ReLU()
         self.pool1 = nn.MaxPool2d(2, 2)
-        
         self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
         self.relu2 = nn.ReLU()
         self.pool2 = nn.MaxPool2d(2, 2)
-
         self.flatten = nn.Flatten()
-        # Le calcul (32 * 2 * 2) = 128 est correct pour 11x9
         self.fc1 = nn.Linear(128, 64)
         self.relu3 = nn.ReLU()
         self.fc2 = nn.Linear(64, 10)

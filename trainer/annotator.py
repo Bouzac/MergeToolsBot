@@ -72,10 +72,8 @@ def main():
             index += 1
             continue
 
-        # --- NOUVEAU : On applique le padding AVANT l'affichage et la sauvegarde ---
         padded_img = pad_to_target_size(img, TARGET_HEIGHT, TARGET_WIDTH)
 
-        # On grossit l'image paddée pour la voir clairement
         view_img = cv2.resize(padded_img, None, fx=15, fy=15, interpolation=cv2.INTER_NEAREST)
 
         cv2.imshow(f"Annoteur ({index + 1}/{len(files)})", view_img)
@@ -85,7 +83,6 @@ def main():
 
         if char.isdigit():
             dest = os.path.join(DATASET_DIR, char, filename)
-            # Au lieu de shutil.move, on ÉCRIT la nouvelle image paddée et on SUPPRIME l'ancienne
             cv2.imwrite(dest, padded_img)
             os.remove(filepath)
             

@@ -3,36 +3,22 @@ from typing import List
 import cv2
 import numpy as np
 import torch
-from torch import nn
 
-BOARD_COORDINATES = {"Top": 176, "Left": 196, "Bottom": 845, "Right": 1411}
+from trainer.train import ChiffreCNN
 
-class ChiffreCNN(nn.Module):
-    def __init__(self):
-        super(ChiffreCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, 3, padding=1)
-        self.relu1 = nn.ReLU()
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(16, 32, 3, padding=1)
-        self.relu2 = nn.ReLU()
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.flatten = nn.Flatten()
-        self.fc1 = nn.Linear(128, 64)
-        self.relu3 = nn.ReLU()
-        self.fc2 = nn.Linear(64, 10)
+MONITOR_SIZE_FACTOR_X = 1366 / 1920
+MONITOR_SIZE_FACTOR_Y = 768 / 1080
 
-    def forward(self, x):
-        x = self.pool1(self.relu1(self.conv1(x)))
-        x = self.pool2(self.relu2(self.conv2(x)))
-        x = self.flatten(x)
-        x = self.relu3(self.fc1(x))
-        x = self.fc2(x)
-        return x
+MONITOR = {"top": 0, "left": -1366, "width": int(1920 * MONITOR_SIZE_FACTOR_X), "height": int(1080 * MONITOR_SIZE_FACTOR_Y)}
+BOARD_COORDINATES = {"Top": 0, "Left": 0, "Bottom": int(1920 * MONITOR_SIZE_FACTOR_X), "Right": int(1080 * MONITOR_SIZE_FACTOR_Y)}
 
-device = torch.device("cpu")
-cnn_model = ChiffreCNN().to(device)
-cnn_model.load_state_dict(torch.load(r"D:\code project\MergeToolsBot\modele_chiffres.pth", map_location=device, weights_only=True))
-cnn_model.eval()
+try:
+    device = torch.device("cpu")
+    cnn_model = ChiffreCNN().to(device)
+    cnn_model.load_state_dict(torch.load(r"modele_chiffres.pth", map_location=device, weights_only=True))
+    cnn_model.eval()
+except FileNotFoundError:
+    print("Erreur du chargement du model")
 
 def isolate_board(frame):
     return frame[
